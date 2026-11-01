@@ -1,417 +1,285 @@
 const express = require("express");
 const cors = require("cors");
 const multer = require("multer");
-const path = require("path");
-const fs = require("fs");
-const crypto = require("crypto");
 const ffmpeg = require("fluent-ffmpeg");
 const ffmpegPath = require("ffmpeg-static");
-
-// ========================================
-// Burmese AI Recap Backend
-// ========================================
+const fs = require("fs");
+const path = require("path");
+const crypto = require("crypto");
 
 const app = express();
-
 const PORT = process.env.PORT || 10000;
 
-// Maximum upload size: 1 GB
-const MAX_SIZE = 1024 * 1024 * 1024;
+ffmpeg.setFfmpegPath(ffmpegPath);
 
-// Upload folders
-const UPLOAD_DIR = path.join(__dirname, "uploads");
+const ROOT = __dirname;
+const UPLOAD_DIR = path.join(ROOT, "uploads");
 const AUDIO_DIR = path.join(UPLOAD_DIR, "audio");
+const OUTPUT_DIR = path.join(ROOT, "outputs");
 
-// Allowed video formats
-const ALLOWED_TYPES = [
-  "video/mp4",
-  "video/quicktime",
-  "video/x-matroska",
-  "video/webm",
-  "video/x-msvideo"
-];
-
-// ========================================
-// Create folders
-// ========================================
-
-if (!fs.existsSync(UPLOAD_DIR)) {
-  fs.mkdirSync(UPLOAD_DIR, { recursive: true });
+for (const dir of [UPLOAD_DIR, AUDIO_DIR, OUTPUT_DIR]) {
+  fs.mkdirSync(dir, { recursive: true });
 }
-
-if (!fs.existsSync(AUDIO_DIR)) {
-  fs.mkdirSync(AUDIO_DIR, { recursive: true });
-}
-
-// ========================================
-// FFmpeg setup
-// ========================================
-
-if (ffmpegPath) {
-  ffmpeg.setFfmpegPath(ffmpegPath);
-} else {
-  console.error("FFmpeg binary was not found.");
-}
-
-// ========================================
-// Middleware
-// ========================================
 
 app.use(cors());
-
-app.use(express.json({ limit: "2mb" }));
-
-app.use(express.urlencoded({ extended: true }));
-
-// ========================================
-// Helper functions
-// ========================================
-
-function isSafeFilename(filename) {
-  if (typeof filename !== "string") {
-    return false;
-  }
-
-  if (!filename.trim()) {
-    return false;
-  }
-
-  if (
-    filename.includes("..") ||
-    filename.includes("/") ||
-    filename.includes("\\")
-  ) {
-    return false;
-  }
-
-  return true;
-}
-
-function getVideoPath(filename) {
-  return path.join(UPLOAD_DIR, filename);
-}
-
-// ========================================
-// Home route
-// ========================================
+app.use(express.json({ limit: "5mb" }));
 
 app.get("/", (req, res) => {
   res.json({
     success: true,
-    name: "Burmese AI Recap Backend",
-    status: "OK",
-    message: "Backend is running"
+    message: "Burmese AI Video Backend"
   });
 });
-
-// ========================================
-// Health check
-// ========================================
 
 app.get("/api/health", (req, res) => {
   res.json({
     success: true,
-    status: "OK",
-    message: "Backend is running",
-    timestamp: new Date().toISOString()
+    status: "OK"
   });
 });
 
-// ========================================
-// Multer storage
-// ========================================
+function safeName(name) {
+  return (
+    typeof name === "string" &&
+    name.length > 0 &&
+    name.length < 200 &&
+    path.basename(name) === name &&
+    !name.includes("..")
+  );
+}
 
-const storage = multer.diskStorage({
-  destination: function (req, file, cb) {
-    cb(null, UPLOAD_DIR);
-  },
+function makeStorage(destination, allowedTypes) {
+  return multer.diskStorage({
+    destination: (req, file, cb) => cb(null, destination),
+    filename: (req, file, cb) => {
+      const ext = path.extname(file.originalname).toLowerCase();
+      cb(null, crypto.randomUUID() + ext);
+    }
+  });
+}
 
-  filename: function (req, file, cb) {
-    const extension = path.extname(file.originalname).toLowerCase();
+const videoTypes = [
+  "video/mp4",
+  "video/quicktime",
+  "video/x-matroska",
+  "video/webm",
+  "video/x-msvideo",
+  "application/octet-stream"
+];
 
-    const uniqueName = crypto.randomUUID() + extension;
+const audioTypes = [
+  "audio/mpeg",
+  "audio/mp3",
+  "audio/wav",
+  "audio/x-wav",
+  "audio/mp4",
+  "audio/aac",
+  "audio/ogg",
+  "audio/webm",
+  "audio/flac",
+  "application/octet-stream"
+];
 
-    cb(null, uniqueName);
-  }
-});
-
-// ========================================
-// Multer upload configuration
-// ========================================
-
-const upload = multer({
-  storage: storage,
-
+const videoUpload = multer({
+  storage: makeStorage(UPLOAD_DIR),
   limits: {
-    fileSize: MAX_SIZE,
-    files: 1
+    fileSize: 1024 * 1024 * 1024
   },
-
-  fileFilter: function (req, file, cb) {
-    if (ALLOWED_TYPES.includes(file.mimetype)) {
-      cb(null, true);
-    } else {
-      cb(
-        new Error(
-          "Unsupported video format. Please upload MP4, MOV, MKV, WEBM, or AVI."
-        )
-      );
+  fileFilter: (req, file, cb) => {
+    if (!videoTypes.includes(file.mimetype)) {
+      return cb(new Error("Video ဖိုင်အမျိုးအစားကိုသာ တင်ပါ။"));
     }
+    cb(null, true);
   }
 });
 
-// ========================================
-// Upload video API
-// POST /api/upload
-// ========================================
-
-app.post(
-  "/api/upload",
-  upload.single("video"),
-  (req, res) => {
-    try {
-      if (!req.file) {
-        return res.status(400).json({
-          success: false,
-          message: "Video file is required"
-        });
-      }
-
-      const file = req.file;
-
-      const fileId = crypto.randomUUID();
-
-      res.status(200).json({
-        success: true,
-
-        message: "Video uploaded successfully",
-
-        file: {
-          id: fileId,
-          name: file.originalname,
-          filename: file.filename,
-          path: file.path,
-          size: file.size,
-          mimetype: file.mimetype
-        }
-      });
-
-    } catch (error) {
-      console.error("Upload error:", error);
-
-      res.status(500).json({
-        success: false,
-        message: "Upload failed"
-      });
+const audioUpload = multer({
+  storage: makeStorage(AUDIO_DIR),
+  limits: {
+    fileSize: 200 * 1024 * 1024
+  },
+  fileFilter: (req, file, cb) => {
+    if (!audioTypes.includes(file.mimetype)) {
+      return cb(new Error("Audio ဖိုင်အမျိုးအစားကိုသာ တင်ပါ။"));
     }
+    cb(null, true);
   }
-);
-
-// ========================================
-// Extract audio API
-// POST /api/extract-audio
-//
-// Request body:
-// {
-//   "filename": "uploaded-video.mp4"
-// }
-//
-// Output:
-// MP3 audio file
-// ========================================
-
-app.post("/api/extract-audio", (req, res) => {
-  const filename = req.body.filename;
-
-  // Check filename
-  if (!isSafeFilename(filename)) {
-    return res.status(400).json({
-      success: false,
-      message: "A valid video filename is required"
-    });
-  }
-
-  // Check uploaded video
-  const videoPath = getVideoPath(filename);
-
-  if (!fs.existsSync(videoPath)) {
-    return res.status(404).json({
-      success: false,
-      message: "Uploaded video was not found"
-    });
-  }
-
-  // Check FFmpeg
-  if (!ffmpegPath) {
-    return res.status(500).json({
-      success: false,
-      message: "FFmpeg is not available on this server"
-    });
-  }
-
-  // Generate output audio filename
-  const audioFilename =
-    path.parse(filename).name +
-    "-" +
-    crypto.randomUUID() +
-    ".mp3";
-
-  const audioPath = path.join(AUDIO_DIR, audioFilename);
-
-  console.log("Starting audio extraction:", filename);
-
-  ffmpeg(videoPath)
-    .noVideo()
-    .audioCodec("libmp3lame")
-    .audioBitrate("128k")
-    .format("mp3")
-
-    .on("start", (commandLine) => {
-      console.log("FFmpeg started");
-    })
-
-    .on("end", () => {
-      try {
-        if (!fs.existsSync(audioPath)) {
-          return res.status(500).json({
-            success: false,
-            message: "Audio file was not created"
-          });
-        }
-
-        const audioStats = fs.statSync(audioPath);
-
-        console.log("Audio extraction completed:", audioFilename);
-
-        return res.status(200).json({
-          success: true,
-
-          message: "Audio extracted successfully",
-
-          audio: {
-            filename: audioFilename,
-            size: audioStats.size,
-            format: "mp3",
-            path: audioPath
-          }
-        });
-
-      } catch (error) {
-        console.error("Audio result error:", error);
-
-        if (!res.headersSent) {
-          return res.status(500).json({
-            success: false,
-            message: "Could not read extracted audio"
-          });
-        }
-      }
-    })
-
-    .on("error", (error) => {
-      console.error("FFmpeg audio extraction error:", error);
-
-      // Remove incomplete audio file
-      if (fs.existsSync(audioPath)) {
-        try {
-          fs.unlinkSync(audioPath);
-        } catch (cleanupError) {
-          console.error("Audio cleanup error:", cleanupError);
-        }
-      }
-
-      if (!res.headersSent) {
-        return res.status(500).json({
-          success: false,
-          message: "Audio extraction failed",
-          error: error.message
-        });
-      }
-    })
-
-    .save(audioPath);
 });
 
-// ========================================
-// Get uploaded video information
-// GET /api/video/:filename
-// ========================================
+// VIDEO UPLOAD
 
-app.get("/api/video/:filename", (req, res) => {
-  const filename = req.params.filename;
-
-  if (!isSafeFilename(filename)) {
+app.post("/api/upload", videoUpload.single("video"), (req, res) => {
+  if (!req.file) {
     return res.status(400).json({
       success: false,
-      message: "Invalid filename"
+      message: "Video ဖိုင် မရရှိပါ။"
     });
   }
-
-  const videoPath = getVideoPath(filename);
-
-  if (!fs.existsSync(videoPath)) {
-    return res.status(404).json({
-      success: false,
-      message: "Video file was not found"
-    });
-  }
-
-  const stats = fs.statSync(videoPath);
 
   res.json({
     success: true,
-
+    message: "Video uploaded successfully",
     file: {
-      filename: filename,
-      size: stats.size,
-      sizeMB: Number(
-        (stats.size / (1024 * 1024)).toFixed(2)
-      ),
-      createdAt: stats.birthtime
+      id: crypto.randomUUID(),
+      name: req.file.originalname,
+      filename: req.file.filename,
+      size: req.file.size,
+      mimetype: req.file.mimetype
     }
   });
 });
 
-// ========================================
-// Global error handler
-// ========================================
+// AUDIO UPLOAD
 
-app.use((error, req, res, next) => {
-  console.error("Server error:", error);
-
-  if (error instanceof multer.MulterError) {
-    if (error.code === "LIMIT_FILE_SIZE") {
-      return res.status(413).json({
-        success: false,
-        message: "Video exceeds the 1GB upload limit"
-      });
-    }
-
-    if (error.code === "LIMIT_FILE_COUNT") {
-      return res.status(400).json({
-        success: false,
-        message: "Only one video can be uploaded at a time"
-      });
-    }
-
+app.post("/api/upload-audio", audioUpload.single("audio"), (req, res) => {
+  if (!req.file) {
     return res.status(400).json({
       success: false,
-      message: error.message
+      message: "Audio ဖိုင် မရရှိပါ။"
     });
   }
 
-  return res.status(400).json({
-    success: false,
-    message: error.message || "Something went wrong"
+  res.json({
+    success: true,
+    message: "Audio uploaded successfully",
+    audio: {
+      filename: req.file.filename,
+      size: req.file.size,
+      mimetype: req.file.mimetype
+    }
   });
 });
 
-// ========================================
-// Start server
-// ========================================
+// AUTO RECAP
+// AI Provider API မချိတ်ဆက်ရသေးသဖြင့် ယာယီရှင်းလင်းသော Error ပြန်ပေးသည်။
 
-app.listen(PORT, "0.0.0.0", () => {
-  console.log(
-    `Burmese AI Recap Backend running on port ${PORT}`
-  );
+app.post("/api/recap", async (req, res) => {
+  return res.status(501).json({
+    success: false,
+    message:
+      "Auto Recap အတွက် AI Transcription နှင့် Summarization API ကို Backend တွင် ချိတ်ဆက်ရန် လိုအပ်ပါသည်။"
+  });
+});
+
+// RENDER VIDEO + VOICEOVER
+
+app.post("/api/render", async (req, res) => {
+  try {
+    const { filename, audioFilename, quality } = req.body;
+
+    if (!safeName(filename) || !safeName(audioFilename)) {
+      return res.status(400).json({
+        success: false,
+        message: "ဖိုင်အမည် မမှန်ကန်ပါ။"
+      });
+    }
+
+    const inputVideo = path.join(UPLOAD_DIR, filename);
+    const inputAudio = path.join(AUDIO_DIR, audioFilename);
+
+    if (!fs.existsSync(inputVideo) || !fs.existsSync(inputAudio)) {
+      return res.status(404).json({
+        success: false,
+        message: "Video သို့မဟုတ် Audio ဖိုင်ကို မတွေ့ပါ။"
+      });
+    }
+
+    const outputFilename =
+      "recap-" + crypto.randomUUID() + ".mp4";
+
+    const outputPath = path.join(OUTPUT_DIR, outputFilename);
+
+    const height = {
+      "480": 480,
+      "720": 720,
+      "1080": 1080
+    }[String(quality)] || 1080;
+
+    await new Promise((resolve, reject) => {
+      ffmpeg()
+        .input(inputVideo)
+        .input(inputAudio)
+        .outputOptions([
+          "-map 0:v:0",
+          "-map 1:a:0",
+          "-c:v libx264",
+          "-preset veryfast",
+          "-crf 23",
+          "-vf scale=-2:" + height,
+          "-c:a aac",
+          "-b:a 192k",
+          "-pix_fmt yuv420p",
+          "-movflags +faststart",
+          "-shortest"
+        ])
+        .format("mp4")
+        .on("end", resolve)
+        .on("error", reject)
+        .save(outputPath);
+    });
+
+    res.json({
+      success: true,
+      message: "Render completed",
+      filename: outputFilename
+    });
+
+  } catch (error) {
+    console.error("Render error:", error);
+
+    res.status(500).json({
+      success: false,
+      message: "Video Render မအောင်မြင်ပါ။",
+      error: error.message
+    });
+  }
+});
+
+// DOWNLOAD MP4
+
+app.get("/api/download/:filename", (req, res) => {
+  const filename = req.params.filename;
+
+  if (!safeName(filename) || !filename.endsWith(".mp4")) {
+    return res.status(400).json({
+      success: false,
+      message: "ဖိုင်အမည် မမှန်ကန်ပါ။"
+    });
+  }
+
+  const filePath = path.join(OUTPUT_DIR, filename);
+
+  if (!fs.existsSync(filePath)) {
+    return res.status(404).json({
+      success: false,
+      message: "MP4 ဖိုင် မတွေ့ပါ။"
+    });
+  }
+
+  res.download(filePath, filename);
+});
+
+// ERROR HANDLER
+
+app.use((error, req, res, next) => {
+  console.error(error);
+
+  if (error instanceof multer.MulterError) {
+    return res.status(400).json({
+      success: false,
+      message:
+        error.code === "LIMIT_FILE_SIZE"
+          ? "ဖိုင်အရွယ်အစား ကန့်သတ်ချက် ကျော်နေပါတယ်။"
+          : error.message
+    });
+  }
+
+  res.status(500).json({
+    success: false,
+    message: error.message || "Server Error"
+  });
+});
+
+app.listen(PORT, () => {
+  console.log("Backend running on port " + PORT);
 });
