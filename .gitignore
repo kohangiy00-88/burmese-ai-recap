@@ -1,0 +1,8 @@
+node_modules/
+uploads/
+.env
+.env.local
+*.mp4
+*.mov
+*.mkv
+*.webm
